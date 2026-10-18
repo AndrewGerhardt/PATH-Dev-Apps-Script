@@ -1,0 +1,307 @@
+# Camp Geiger PATH Apps Script
+
+This Google Apps Script project connects the PATH spreadsheet, AppSheet data,
+Cloudflare D1, the PATH Records portal, Google Drive legacy PDFs, and Resend
+notifications.
+
+The production workflow now sends finalized report data to the portal. The
+authorized user's browser generates each new PDF from an immutable snapshot.
+Previously created Google Drive PDFs remain available as legacy backups.
+
+## Current production status
+
+- 2026 Sessions 1 through 5 have been exported to the production portal.
+- New snapshot-backed reports and old Google Drive PDFs can coexist.
+- Combo classes produce separate reports for each badge.
+- Repeated Roster rows for the same Scout and badge remain separate reports.
+- One Resend summary is sent after each full session export.
+- Production pilots do not send completion summaries.
+
+## Main responsibilities
+
+The project provides four related workflows:
+
+1. Import Scouts and Roster rows from the staging spreadsheet.
+2. Validate and export finalized session reports to PATH Records.
+3. Maintain record metadata and activity history in Cloudflare D1.
+4. Generate Google Drive PDFs through the retained legacy workflow.
+
+## Spreadsheet configuration
+
+`config.gs` contains the spreadsheet, template, output-folder, and sheet names
+used by the project. Do not place API tokens or shared secrets in that file.
+
+### Main spreadsheet sheets
+
+| Sheet | Purpose |
+|---|---|
+| `Badges` | Badge or activity names, IDs, and areas |
+| `BadgeReqTemplate` | Requirement order and prerequisite flags |
+| `Offerings` | Session offerings, periods, and badge assignments |
+| `Scouts` | Canonical Scout identity and unit data |
+| `Roster` | Attendance, requirements, earned status, comments, and legacy PDF links |
+| `ExportRuns` | Export run status and timestamps |
+
+### Staging spreadsheet sheets
+
+| Sheet | Purpose |
+|---|---|
+| `Staging_RosterRaw` | Pasted registration or roster export |
+| `OfferingAliases` | Maps period and exported class name to `OfferingID` |
+| `BadgeAliases` | Optional exported badge-name mapping |
+| `Import_Log` | Optional import messages |
+
+### Required portal-export headers
+
+The portal exporter validates these headers before making changes.
+
+`Roster`:
+
+```text
+RosterID, Year, Session, OfferingID, ScoutID,
+M, T, W, TH, F,
+ReqComplete, ReqOptional, ReqIncomplete,
+Comments, Earned_1, Earned_2, PR_File_1, PR_File_2
+```
+
+`Scouts`:
+
+```text
+ScoutID, FirstName, LastName, UnitNumber, UnitType, UnitState
+```
+
+`Offerings`:
+
+```text
+OfferingID, BadgeID_1, BadgeID_2, Period
+```
+
+`Badges`:
+
+```text
+BadgeID, BadgeName
+```
+
+`BadgeReqTemplate`:
+
+```text
+TablKey, KeyID, BadgeReqID, BadgeID, ReqCode, PreReq
+```
+
+Only `BadgeID`, `ReqCode`, and `PreReq` are required by the snapshot exporter.
+
+## Script Properties
+
+Open **Apps Script → Project Settings → Script Properties** to manage these
+values. Never paste their values into source files or GitHub.
+
+### Required for production portal exports
+
+| Property | Purpose |
+|---|---|
+| `PATH_RECORD_PRODUCTION_IMPORT_SECRET` | Must match Cloudflare `RECORD_IMPORT_SECRET`; protects snapshot and completion-report endpoints |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account containing the D1 database |
+| `CLOUDFLARE_D1_DATABASE_ID` | Production PATH Records D1 database ID |
+| `CLOUDFLARE_D1_API_TOKEN` | Token permitted to query and import into that D1 database |
+| `PATH_RECORDS_IMPORT_NOTIFICATION_SECRET` | Must match Cloudflare `IMPORT_NOTIFICATION_SECRET`; completes record-activity emails |
+
+### Optional or legacy
+
+| Property | Purpose |
+|---|---|
+| `PATH_RECORDS_SITE_ORIGIN` | Portal origin override; defaults to `https://records.campgeigerscouting.org` |
+| `RECORDS_SYNC_URL` | Earlier records-sync endpoint |
+| `RECORDS_SYNC_KEY` | Earlier records-sync shared key |
+| `PATH_RECORD_IMPORT_SECRET` | Preview-test snapshot secret; keep separate from production |
+
+The completion-report recipient is not stored in Apps Script. Cloudflare uses
+the production variable `PORTAL_EXPORT_REPORT_EMAIL` and sends through Resend.
+
+## PATH Functions menu
+
+### Importing
+
+- **1) Import Scouts** adds new Scouts and updates the selected session.
+- **2) Import Rosters** imports Roster rows after resolving offering aliases.
+
+### Exporting
+
+- **1) Preview portal export** performs all validation and shows counts without
+  changing D1 or the portal.
+- **2) Send one RosterID pilot** sends only one Roster row. A combo row still
+  creates two independent reports.
+- **3) Send reports to portal** starts the resumable full-session export.
+- **Test completion email** asks Cloudflare to send a Resend test message.
+- **Legacy: Create troop folders** creates the Google Drive output folders.
+- **Legacy: Generate Drive PDFs** runs the older Google Docs and Drive PDF
+  workflow.
+
+### Run controls
+
+- **Stop Current Export** stops the active portal or legacy export safely.
+- **Resume Portal Export** resumes a stopped portal run from its saved cursor.
+- **Portal Export Status** shows the active run or most recent completed run.
+- **View Latest Run Status** shows the latest legacy `ExportRuns` entry.
+- **Remove Blank Rows** removes empty rows from the active sheet.
+
+## Normal end-of-session workflow
+
+1. Confirm staff have finalized attendance, requirements, earned status, and
+   comments in PATH/AppSheet.
+2. Select **Preview portal export** for the year and session.
+3. Review the counts and stop if any validation issue appears.
+4. For a new configuration or structural change, send one RosterID pilot and
+   verify the portal row and generated PDF.
+5. Select **Send reports to portal** for the full session.
+6. Do not edit `Roster`, `Scouts`, `Offerings`, `Badges`, or
+   `BadgeReqTemplate` while the run is active.
+7. Wait until **Portal Export Status** shows `Completed`.
+8. Review the Resend completion email and spot-check a regular report and a
+   combo-class report.
+
+Uploading the same finalized data again is safe. Unchanged snapshots do not
+create another version.
+
+## Portal export stages
+
+### Metadata
+
+The exporter reads the selected PATH rows, matches current D1 records, and
+creates SQL only for new or changed metadata. Existing legacy Drive URLs are
+preserved.
+
+### Snapshots
+
+The exporter uploads reports in batches of 40. Each report contains exactly one
+badge or activity. A combo class fans out into two independent records,
+snapshots, portal rows, and PDFs.
+
+Snapshot outcomes are:
+
+- `created`: first snapshot for that record
+- `versioned`: corrected data created a new immutable version
+- `restored`: the submitted data matched an earlier version, which became
+  current again
+- `unchanged`: the current snapshot already matched
+
+### Notifications
+
+After snapshots finish, the portal completes pending Scoutmaster and Leader
+record-activity digests. Cloudflare then sends one admin export summary through
+Resend. The summary includes the RunID, duration, metadata counts, snapshot
+counts, and notification result.
+
+A completion-email failure is recorded in **Portal Export Status** but does not
+convert an otherwise successful report upload into a failed export.
+
+## Safeguards
+
+- The preview performs the same report-building validation as production.
+- Every badge or activity becomes one independent report.
+- Combo requirement tokens must include a badge name or badge ID prefix.
+- Every Roster row remains independent, including repeated enrollment in the
+  same badge and session.
+- A source fingerprint stops the run if PATH data changes after it begins.
+- Progress is stored in Script Properties and continued with time triggers.
+- Snapshot requests retry temporary HTTP failures with exponential backoff.
+- Completion-email retries use the same RunID; the portal forwards an
+  idempotency key to Resend to prevent duplicate messages.
+- Existing snapshot bodies are immutable in D1.
+- Legacy Drive PDFs are preserved and remain available as fallback files.
+
+## File map
+
+| File | Responsibility |
+|---|---|
+| `Menu.gs` | `PATH Functions` custom menu |
+| `AppSheetAPIs.gs` | AppSheet entry point for starting exports |
+| `Imports.gs` | Scout and Roster imports from staging |
+| `PortalSnapshotExport.gs` | Validation, report construction, metadata orchestration, resumable session export, and completion report |
+| `ProductionSnapshotUpload.gs` | Protected snapshot transport, 40-report chunking, and retries |
+| `D1Import.gs` | D1 reads, comparisons, incremental SQL import, activity batches, and notification completion |
+| `recordsJSON.gs` | Legacy records-index and Cloudflare configuration helpers |
+| `RunManager.gs`, `RunState.gs`, `StateStorage.gs` | Run creation and state management |
+| `Trigger.gs` | Legacy and continuation triggers |
+| `CoreRun.gs`, `QueueBuilder.gs`, `Processor.gs` | Legacy Drive PDF queue and workers |
+| `MergeEngine.gs` | Legacy Google Docs merge and PDF creation |
+| `folders.gs` | Legacy unit-folder creation |
+| `Utils.gs`, `JoinAndMergeData.gs` | Shared sheet, lookup, and formatting helpers |
+| `RunUI.gs` | Legacy run prompts and status |
+| `debug.gs` | Manual diagnostics; do not run casually in production |
+
+## Required Google services
+
+The project uses:
+
+- Google Sheets
+- Script Properties
+- Time-driven triggers
+- URL Fetch
+- Google Drive and Google Docs for legacy PDFs
+- The Advanced Drive service for the legacy `Drive.Files.copy` operation
+
+The new portal export does not use Google mail. All portal-related email is sent
+by Cloudflare through Resend.
+
+## Troubleshooting
+
+### The PATH Functions menu is missing
+
+Refresh the spreadsheet and wait several seconds for `onOpen()` to finish.
+
+### Preview reports validation issues
+
+Nothing was uploaded. Correct the exact Roster, Scout, offering, badge, or
+requirement issue shown and run the preview again.
+
+### The run says the source changed
+
+Stop the run and start a new preview. The exporter intentionally refuses to
+combine reports from two different source states.
+
+### The run stopped during metadata or snapshots
+
+Open **Portal Export Status** for the saved error. Correct the configuration or
+temporary service issue, then select **Resume Portal Export**. Do not start a
+second run over the saved state.
+
+### The completion email did not arrive
+
+Run **Test completion email**. Check Cloudflare production values for
+`PORTAL_EXPORT_REPORT_EMAIL`, `RESEND_API_KEY`, `AUTH_EMAIL_FROM`, and
+`RECORD_IMPORT_SECRET`, plus the matching Apps Script
+`PATH_RECORD_PRODUCTION_IMPORT_SECRET`.
+
+### A report still opens a legacy PDF
+
+That record does not yet have an active snapshot. Legacy PDFs intentionally
+remain available until a matching snapshot is uploaded.
+
+## Annual rollover
+
+Before exporting a new year:
+
+1. Update `Offerings`, `Badges`, and `BadgeReqTemplate` for the new program.
+2. Confirm Scout unit state and type values are complete.
+3. Import and validate the first session in staging.
+4. Preview the new session before uploading anything.
+5. Use a one-RosterID pilot and verify both a normal report and any combo
+   offering behavior.
+
+The portal-export year is selected at runtime. The normal D1 import helper uses
+the current calendar year; use its specific-year function only when an older or
+future year is intentionally required.
+
+## Source-control and update notes
+
+Google Apps Script does not accept Markdown files in the browser editor. Keep
+this README beside an exported or source-controlled copy of the `.gs` files.
+
+When updating production:
+
+1. Replace only the changed `.gs` files.
+2. Save the Apps Script project.
+3. Refresh the spreadsheet if `Menu.gs` changed.
+4. Run the read-only preview or completion-email test appropriate to the
+   change.
+5. Keep production and preview secrets separate.

@@ -8,7 +8,7 @@
  * code. Keep the preview-test secret in a separate Script Property.
  */
 const PATH_REPORT_SNAPSHOT_UPLOAD = Object.freeze({
-  PORTAL_ORIGIN: 'https://records.campgeigerscouting.org',
+  PORTAL_ORIGIN: 'https://records.path-systems.org',
   SECRET_PROPERTY: 'PATH_RECORD_PRODUCTION_IMPORT_SECRET',
   CHUNK_SIZE: 40,
   MAX_ATTEMPTS: 3

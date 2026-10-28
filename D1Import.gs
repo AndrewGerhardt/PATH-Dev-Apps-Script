@@ -1856,7 +1856,7 @@ function sendPendingRecordActivityNotifications() {
         D1_RECORD_ACTIVITY_SITE_ORIGIN_PROPERTY
       )
     ) ||
-    "https://records.campgeigerscouting.org";
+    "https://records.path-systems.org";
 
   const endpoint =
     siteOrigin.replace(/\/$/, "") +

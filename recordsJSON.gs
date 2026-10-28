@@ -543,7 +543,7 @@ function configureRecordsPortalSync() {
     .getScriptProperties()
     .setProperties({
       RECORDS_SYNC_URL:
-        "https://records.campgeigerscouting.org/api/sync",
+        "https://records.path-systems.org/api/sync",
 
       RECORDS_SYNC_KEY:
         "PASTE_THE_SAME_RECORDS_SYNC_KEY_HERE"
